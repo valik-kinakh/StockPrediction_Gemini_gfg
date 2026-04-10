@@ -1,33 +1,24 @@
-import logo from './logo.svg';
-import './App.css';
-import FinancialForm from './FinancialForm';
 import { useState } from 'react';
-import Result from './Result';
+import './App.css';
+import PredictionForm from './PredictionForm';
+import PredictionResult from './PredictionResult';
 
 function App() {
-
-  const [result, setResult] = useState("")
+  const [prediction, setPrediction] = useState(null);
 
   return (
     <div className="App">
       <header className="App-header">
         <h1>Stock Prediction</h1>
       </header>
-      {
-        result.length > 0 &&
-        <>
-          <Result result={result} />
-          <button className='clearbtn'
-            onClick={() => {
-              setResult("")
-            }}
-          >Clear Result</button>
-        </>
-      }
-      {
-        result.length == 0 && <FinancialForm setResult={setResult} />
-      }
-
+      {prediction ? (
+        <PredictionResult
+          data={prediction}
+          onReset={() => setPrediction(null)}
+        />
+      ) : (
+        <PredictionForm onResult={setPrediction} />
+      )}
     </div>
   );
 }
