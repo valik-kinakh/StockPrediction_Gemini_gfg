@@ -204,3 +204,212 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* -------------------------------------------------------------------------
+   ML forecast result extensions
+   ------------------------------------------------------------------------- */
+
+.regime-banner {
+  padding: 16px 20px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  border: 1px solid transparent;
+}
+
+.regime-banner.overpriced {
+  background-color: #f1f8e9;
+  border-color: #a5d6a7;
+}
+
+.regime-banner.underpriced {
+  background-color: #ffebee;
+  border-color: #ef9a9a;
+}
+
+.regime-banner.fair {
+  background-color: #e3f2fd;
+  border-color: #bbdefb;
+}
+
+.regime-banner.unknown {
+  background-color: #f5f5f5;
+  border-color: #ccc;
+  color: #666;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.regime-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.regime-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #555;
+  font-weight: 600;
+}
+
+.regime-value {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.regime-banner.overpriced .regime-value { color: #2e7d32; }
+.regime-banner.underpriced .regime-value { color: #c62828; }
+.regime-banner.fair .regime-value { color: #1565c0; }
+
+.regime-metrics {
+  display: flex;
+  gap: 20px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 10px;
+}
+
+.regime-idea {
+  margin: 0;
+  font-size: 14px;
+  color: #333;
+  line-height: 1.4;
+}
+
+.model-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.model-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background-color: #ffffff;
+  border: 1px solid #eaeaea;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.model-pill.fail {
+  background-color: #fafafa;
+  color: #999;
+}
+
+.model-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.model-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.model-name {
+  font-weight: 600;
+  color: #282c34;
+}
+
+.model-pill.fail .model-name {
+  color: #777;
+}
+
+.model-meta {
+  color: #888;
+  font-size: 12px;
+}
+
+.model-err {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #c62828;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-section,
+.terminal-projection {
+  margin-bottom: 24px;
+}
+
+.comparison-section h3,
+.terminal-projection h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #555;
+  margin: 0 0 10px 0;
+}
+
+.comparison-desc {
+  font-size: 13px;
+  color: #666;
+  margin: 0 0 12px 0;
+  line-height: 1.4;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #ffffff;
+  border: 1px solid #eaeaea;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 14px;
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.comparison-table th {
+  background-color: #fafafa;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #555;
+}
+
+.comparison-table tr:last-child td {
+  border-bottom: none;
+}
+
+.comparison-table .pos { color: #2e7d32; font-weight: 600; }
+.comparison-table .neg { color: #c62828; font-weight: 600; }
+
+.comparison-empty {
+  background-color: #f5f5f5;
+  border: 1px dashed #ccc;
+  padding: 14px 16px;
+  border-radius: 8px;
+  color: #666;
+  font-size: 13px;
+}
+
+.comparison-empty code {
+  background-color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+}

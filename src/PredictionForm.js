@@ -1,38 +1,42 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import './PredictionForm.css';
 
 const HORIZON_PRESETS = [
-  { value: '1w', label: '1 Week (5 trading days)', days: 5 },
-  { value: '1m', label: '1 Month (21 trading days)', days: 21 },
-  { value: '3m', label: '3 Months (63 trading days)', days: 63 },
-  { value: '6m', label: '6 Months (126 trading days)', days: 126 },
-  { value: '1y', label: '1 Year (252 trading days)', days: 252 },
+  { value: 5, label: '1 Week (5 trading days)' },
+  { value: 21, label: '1 Month (21 trading days)' },
+  { value: 63, label: '3 Months (63 trading days)' },
 ];
 
-function PredictionForm({ onResult }) {
-  const [ticker, setTicker] = useState('');
-  const [amount, setAmount] = useState('1000');
-  const [horizonPreset, setHorizonPreset] = useState('1m');
+function PredictionForm({ ticker, setTicker, horizon, setHorizon, onResult }) {
+  const [tickers, setTickers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v1/watchlist')
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((list) => !cancelled && setTickers(list))
+      .catch(() => {
+        // Fallback: leave the dropdown empty and let the user type a ticker.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
-    const horizonDays =
-      HORIZON_PRESETS.find((p) => p.value === horizonPreset)?.days ?? 21;
+    const payload = { ticker: ticker.trim().toUpperCase(), horizon };
 
     try {
-      const res = await fetch('/api/predict', {
+      const res = await fetch('/api/v1/forecast/options-context', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ticker: ticker.trim().toUpperCase(),
-          amount: Number(amount),
-          horizonDays,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -58,35 +62,42 @@ function PredictionForm({ onResult }) {
 
   return (
     <form className="prediction-form" onSubmit={handleSubmit}>
+      <h2>Forecast</h2>
+      <p className="form-subtitle">
+        Run all four models against one ticker and compare with live market IV.
+      </p>
+
       <label>
-        Stock ticker
-        <input
-          type="text"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value)}
-          placeholder="e.g. AAPL"
-          required
-          maxLength={10}
-        />
+        Ticker
+        {tickers.length > 0 ? (
+          <select
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value)}
+            required
+          >
+            {tickers.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value)}
+            placeholder="e.g. AAPL"
+            required
+            maxLength={10}
+          />
+        )}
       </label>
 
       <label>
-        Investment amount ($)
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          min="1"
-          step="any"
-          required
-        />
-      </label>
-
-      <label>
-        Time horizon
+        Forecast horizon
         <select
-          value={horizonPreset}
-          onChange={(e) => setHorizonPreset(e.target.value)}
+          value={horizon}
+          onChange={(e) => setHorizon(Number(e.target.value))}
         >
           {HORIZON_PRESETS.map((p) => (
             <option key={p.value} value={p.value}>
@@ -98,8 +109,8 @@ function PredictionForm({ onResult }) {
 
       {error && <div className="form-error">{error}</div>}
 
-      <button type="submit" disabled={loading}>
-        {loading ? 'Simulating 2000 price paths...' : 'Predict'}
+      <button type="submit" disabled={loading || !ticker}>
+        {loading ? 'Running models (Chronos may take 2-5s)...' : 'Generate Forecast'}
       </button>
     </form>
   );

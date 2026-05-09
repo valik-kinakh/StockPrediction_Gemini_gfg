@@ -2,3 +2,5 @@ FreeSimpleGUI==5.1.1
 numpy==2.1
 scipy==1.15.1
 yfinance==0.2.54
+matplotlib>=3.9.0
+flask>=3.0.0

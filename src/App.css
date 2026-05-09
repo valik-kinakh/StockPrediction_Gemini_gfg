@@ -4,7 +4,18 @@
 }
 .App-header {
   color: #282c34;
+  padding: 24px 16px 8px;
+}
 
+.App-header h1 {
+  margin: 0 0 6px 0;
+  font-size: 26px;
+}
+
+.App-subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: #666;
 }
 
 .clearbtn{

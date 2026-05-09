@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -25,91 +26,193 @@ const fmtPct = (n) =>
 
 const fmtDate = (s) => {
   if (!s) return '';
-  const [y, m, d] = s.split('-');
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const [, m, d] = s.split('-');
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
   return `${months[Number(m) - 1]} ${Number(d)}`;
 };
 
-function buildChartData(history, projection) {
+const MODEL_DISPLAY = {
+  naive: { label: 'Naive', color: '#9e9e9e' },
+  gbm: { label: 'GBM', color: '#1976d2' },
+  arima: { label: 'ARIMA', color: '#f57c00' },
+  chronos: { label: 'Chronos', color: '#2e7d32' },
+};
+
+function buildChartData(history, models) {
   const rows = [];
+  const seenDates = new Set();
+
   for (const h of history) {
-    rows.push({
-      date: h.date,
-      price: h.price,
-      p5: null,
-      p50: null,
-      p95: null,
-      band: null,
-    });
+    const row = { date: h.date, price: h.price };
+    rows.push(row);
+    seenDates.add(h.date);
   }
-  for (const p of projection) {
-    rows.push({
-      date: p.date,
-      price: null,
-      p5: p.p5,
-      p50: p.p50,
-      p95: p.p95,
-      // "band" is the [p5, p95] tuple form used by Recharts Area for a true band.
-      band: [p.p5, p.p95],
-    });
+
+  // Collect all projection dates from any model.
+  const projDates = new Set();
+  for (const m of models) {
+    if (!m.available) continue;
+    for (const p of m.projection) projDates.add(p.date);
+  }
+
+  for (const d of [...projDates].sort()) {
+    const row = { date: d, price: null };
+    for (const m of models) {
+      if (!m.available) continue;
+      const point = m.projection.find((p) => p.date === d);
+      if (!point) continue;
+      row[`${m.name}_p50`] = point.p50;
+      row[`${m.name}_band`] = [point.p5, point.p95];
+    }
+    rows.push(row);
   }
   return rows;
 }
 
-function SignalPill({ label, pass }) {
-  const cls = pass === true ? 'pill pass' : pass === false ? 'pill fail' : 'pill unknown';
-  const text = pass === true ? 'PASS' : pass === false ? 'FAIL' : 'n/a';
+function RegimeBanner({ ctx }) {
+  if (!ctx || !ctx.available) {
+    return (
+      <div className="regime-banner unknown">
+        <strong>Options context unavailable</strong>
+        <span>{ctx?.reason || 'no signal'}</span>
+      </div>
+    );
+  }
+  const cls =
+    ctx.regime === 'overpriced'
+      ? 'regime-banner overpriced'
+      : ctx.regime === 'underpriced'
+      ? 'regime-banner underpriced'
+      : 'regime-banner fair';
   return (
     <div className={cls}>
-      <span className="pill-label">{label}</span>
-      <span className="pill-value">{text}</span>
+      <div className="regime-row">
+        <span className="regime-label">Volatility regime</span>
+        <span className="regime-value">{ctx.regime.toUpperCase()}</span>
+      </div>
+      <div className="regime-metrics">
+        <span>
+          σ<sub>forecast</sub> = {(ctx.sigmaForecast * 100).toFixed(1)}%
+        </span>
+        <span>
+          IV<sub>30</sub> = {(ctx.iv30 * 100).toFixed(1)}%
+        </span>
+        <span>ratio = {ctx.ratio}</span>
+      </div>
+      <p className="regime-idea">{ctx.tradeIdea}</p>
     </div>
   );
 }
 
+function ModelComparison({ ticker }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/v1/forecast/backtest/${encodeURIComponent(ticker)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((d) => !cancelled && setData(d))
+      .catch(() => !cancelled && setError('backtest unavailable'));
+    return () => {
+      cancelled = true;
+    };
+  }, [ticker]);
+
+  if (error) {
+    return (
+      <div className="comparison-empty">
+        Backtest comparison not loaded — run{' '}
+        <code>python evaluation/run_backtest.py</code> to populate it.
+      </div>
+    );
+  }
+  if (!data) return <div className="comparison-empty">Loading backtest…</div>;
+  if (!data.available) {
+    return <div className="comparison-empty">{data.reason}</div>;
+  }
+
+  return (
+    <table className="comparison-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Horizon</th>
+          <th>MAPE</th>
+          <th>Directional accuracy</th>
+          <th>Origins</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.metrics.map((m) => (
+          <tr key={`${m.model}-${m.horizon}`}>
+            <td>
+              <span
+                className="model-swatch"
+                style={{ backgroundColor: MODEL_DISPLAY[m.model]?.color || '#666' }}
+              />
+              {MODEL_DISPLAY[m.model]?.label || m.model}
+            </td>
+            <td>{m.horizon}d</td>
+            <td>{(m.mape * 100).toFixed(2)}%</td>
+            <td>{(m.directionalAccuracy * 100).toFixed(0)}%</td>
+            <td>{m.originCount}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function PredictionResult({ data, onReset }) {
-  const chartData = buildChartData(data.history, data.projection);
-  const firstProjectionDate =
-    data.projection.length > 0 ? data.projection[0].date : null;
-
-  const rec = data.recommendation;
-  const vol = data.volatilitySignals;
-
-  const returnClass = (v) =>
-    v > 0 ? 'return-card positive' : v < 0 ? 'return-card negative' : 'return-card';
+  const chartData = buildChartData(data.history, data.models);
+  const firstProjDate =
+    data.models.find((m) => m.available)?.projection[0]?.date || null;
 
   return (
     <div className="prediction-result">
       <div className="result-header">
         <h2>
-          {data.ticker} — {fmtUSD(data.currentPrice)} — {data.horizonDays}d horizon
+          {data.ticker} — {fmtUSD(data.currentPrice)} — {data.horizon}d horizon
         </h2>
         <div className="result-subheader">
-          Historical drift {fmtPct(data.muAnnual)} · volatility {fmtPct(data.sigmaAnnual)} (annualised)
+          As of {data.asOf} · 4 models compared
         </div>
       </div>
 
-      <div className={`recommendation-pill rec-${rec.color}`}>
-        <div className="rec-label">{rec.label}</div>
-        <div className="rec-rationale">{rec.rationale}</div>
-      </div>
+      {data.optionsContext && <RegimeBanner ctx={data.optionsContext} />}
 
       <div className="chart-wrap">
-        <ResponsiveContainer width="100%" height={360}>
+        <ResponsiveContainer width="100%" height={400}>
           <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
             <defs>
-              <linearGradient id="bandFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#4CAF50" stopOpacity={0.35} />
-                <stop offset="100%" stopColor="#4CAF50" stopOpacity={0.05} />
-              </linearGradient>
+              {data.models.map((m) => (
+                <linearGradient
+                  key={m.name}
+                  id={`band-${m.name}`}
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1"
+                >
+                  <stop
+                    offset="0%"
+                    stopColor={MODEL_DISPLAY[m.name]?.color || '#666'}
+                    stopOpacity={0.18}
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor={MODEL_DISPLAY[m.name]?.color || '#666'}
+                    stopOpacity={0.04}
+                  />
+                </linearGradient>
+              ))}
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
-            <XAxis
-              dataKey="date"
-              tickFormatter={fmtDate}
-              minTickGap={24}
-              stroke="#666"
-            />
+            <XAxis dataKey="date" tickFormatter={fmtDate} minTickGap={24} stroke="#666" />
             <YAxis
               domain={['auto', 'auto']}
               tickFormatter={(v) => `$${Number(v).toFixed(0)}`}
@@ -118,19 +221,14 @@ function PredictionResult({ data, onReset }) {
             <Tooltip
               formatter={(value, name) => {
                 if (value == null) return ['—', name];
+                if (Array.isArray(value)) {
+                  return [`${fmtUSD(value[0])} – ${fmtUSD(value[1])}`, name];
+                }
                 return [fmtUSD(Number(value)), name];
               }}
               labelFormatter={fmtDate}
             />
             <Legend />
-            <Area
-              type="monotone"
-              dataKey="band"
-              name="P5–P95 projection band"
-              stroke="none"
-              fill="url(#bandFill)"
-              isAnimationActive={false}
-            />
             <Line
               type="monotone"
               dataKey="price"
@@ -141,19 +239,33 @@ function PredictionResult({ data, onReset }) {
               isAnimationActive={false}
               connectNulls={false}
             />
-            <Line
-              type="monotone"
-              dataKey="p50"
-              name="Projected median"
-              stroke="#4CAF50"
-              strokeWidth={2}
-              dot={false}
-              isAnimationActive={false}
-              connectNulls={false}
-            />
-            {firstProjectionDate && (
+            {data.models
+              .filter((m) => m.available)
+              .map((m) => [
+                <Area
+                  key={`band-${m.name}`}
+                  type="monotone"
+                  dataKey={`${m.name}_band`}
+                  name={`${MODEL_DISPLAY[m.name]?.label || m.name} (P5–P95)`}
+                  stroke="none"
+                  fill={`url(#band-${m.name})`}
+                  isAnimationActive={false}
+                />,
+                <Line
+                  key={`p50-${m.name}`}
+                  type="monotone"
+                  dataKey={`${m.name}_p50`}
+                  name={`${MODEL_DISPLAY[m.name]?.label || m.name} median`}
+                  stroke={MODEL_DISPLAY[m.name]?.color || '#666'}
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />,
+              ])}
+            {firstProjDate && (
               <ReferenceLine
-                x={firstProjectionDate}
+                x={firstProjDate}
                 stroke="#999"
                 strokeDasharray="3 3"
                 label={{ value: 'Today', position: 'top', fill: '#666', fontSize: 12 }}
@@ -163,43 +275,82 @@ function PredictionResult({ data, onReset }) {
         </ResponsiveContainer>
       </div>
 
-      <div className="return-cards">
-        <div className={returnClass(data.dollarReturn.low)}>
-          <div className="card-label">Low (P5)</div>
-          <div className="card-value">{fmtUSD(data.dollarReturn.low)}</div>
-        </div>
-        <div className={returnClass(data.dollarReturn.expected)}>
-          <div className="card-label">Expected (P50)</div>
-          <div className="card-value">{fmtUSD(data.dollarReturn.expected)}</div>
-          <div className="card-sub">{fmtPct(data.expectedReturnPct)} over horizon</div>
-        </div>
-        <div className={returnClass(data.dollarReturn.high)}>
-          <div className="card-label">High (P95)</div>
-          <div className="card-value">{fmtUSD(data.dollarReturn.high)}</div>
-        </div>
+      <div className="model-status">
+        {data.models.map((m) => (
+          <div
+            key={m.name}
+            className={m.available ? 'model-pill ok' : 'model-pill fail'}
+          >
+            <span
+              className="model-dot"
+              style={{ backgroundColor: MODEL_DISPLAY[m.name]?.color || '#666' }}
+            />
+            <span className="model-name">
+              {MODEL_DISPLAY[m.name]?.label || m.name}
+            </span>
+            <span className="model-meta">
+              {m.available ? `${m.seconds.toFixed(1)}s` : 'unavailable'}
+            </span>
+            {!m.available && m.error && (
+              <span className="model-err" title={m.error}>
+                {m.error.slice(0, 60)}
+              </span>
+            )}
+          </div>
+        ))}
       </div>
 
-      <div className="signals-section">
-        <h3>Volatility signals</h3>
-        {vol.available ? (
-          <div className="signal-pills">
-            <SignalPill label="Avg volume" pass={vol.avgVolume} />
-            <SignalPill label="IV30 / RV30" pass={vol.iv30Rv30} />
-            <SignalPill label="Term slope 0→45" pass={vol.tsSlope045} />
-            <div className="pill info">
-              <span className="pill-label">Expected move</span>
-              <span className="pill-value">{vol.expectedMove ?? 'n/a'}</span>
-            </div>
-          </div>
-        ) : (
-          <div className="signals-unavailable">
-            Volatility signals unavailable: {vol.reason || 'no data'}
-          </div>
-        )}
-      </div>
+      <section className="comparison-section">
+        <h3>Backtest comparison</h3>
+        <p className="comparison-desc">
+          Walk-forward expanding-window backtest, averaged across origins.
+          MAPE = mean absolute percentage error;
+          {' '}directional accuracy = sign of cumulative return at horizon.
+        </p>
+        <ModelComparison ticker={data.ticker} />
+      </section>
+
+      <section className="terminal-projection">
+        <h3>Final-step quantiles</h3>
+        <table className="comparison-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>P5 (pessimistic)</th>
+              <th>P50 (median)</th>
+              <th>P95 (optimistic)</th>
+              <th>Median return</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.models
+              .filter((m) => m.available)
+              .map((m) => {
+                const last = m.projection[m.projection.length - 1];
+                if (!last) return null;
+                const ret = last.p50 / data.currentPrice - 1;
+                return (
+                  <tr key={m.name}>
+                    <td>
+                      <span
+                        className="model-swatch"
+                        style={{ backgroundColor: MODEL_DISPLAY[m.name]?.color || '#666' }}
+                      />
+                      {MODEL_DISPLAY[m.name]?.label || m.name}
+                    </td>
+                    <td>{fmtUSD(last.p5)}</td>
+                    <td>{fmtUSD(last.p50)}</td>
+                    <td>{fmtUSD(last.p95)}</td>
+                    <td className={ret >= 0 ? 'pos' : 'neg'}>{fmtPct(ret)}</td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </section>
 
       <button className="reset-btn" onClick={onReset}>
-        New Prediction
+        New Forecast
       </button>
     </div>
   );

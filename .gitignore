@@ -30,3 +30,18 @@ yarn-error.log*
 *.pyc
 
 .idea
+.claude/
+**/.claude/
+
+# archived legacy UIs (gui.py, web_app.py, etc.) — moved aside during refactor
+/_archive/
+
+# parquet OHLCV cache
+/backend/forecasting/_cache/
+
+# pytest cache
+/.pytest_cache/
+**/.pytest_cache/
+
+# evaluation artifacts that are large or regenerated
+/evaluation/output/*.png

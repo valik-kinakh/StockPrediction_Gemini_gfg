@@ -11,6 +11,19 @@
   text-align: left;
 }
 
+.prediction-form h2 {
+  margin: 0;
+  font-size: 22px;
+  color: #282c34;
+}
+
+.form-subtitle {
+  margin: -10px 0 0 0;
+  color: #666;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .prediction-form label {
   display: flex;
   flex-direction: column;

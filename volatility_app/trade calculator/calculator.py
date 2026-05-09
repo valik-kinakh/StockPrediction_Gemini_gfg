@@ -1,33 +1,85 @@
 """
-DISCLAIMER: 
+DISCLAIMER:
 
-This software is provided solely for educational and research purposes. 
-It is not intended to provide investment advice, and no investment recommendations are made herein. 
-The developers are not financial advisors and accept no responsibility for any financial decisions or losses resulting from the use of this software. 
+This software is provided solely for educational and research purposes.
+It is not intended to provide investment advice, and no investment recommendations are made herein.
+The developers are not financial advisors and accept no responsibility for any financial decisions or losses resulting from the use of this software.
 Always consult a professional financial advisor before making any investment decisions.
 """
 
 
-import FreeSimpleGUI as sg
-import yfinance as yf
+import numpy as np
 from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
-import numpy as np
-import threading
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Callable
 
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ATMInfo:
+    """ATM option data for a single expiration."""
+    exp_date: str
+    dte: int
+    call_iv: float
+    put_iv: float
+    atm_iv: float
+    call_mid: Optional[float]
+    put_mid: Optional[float]
+    straddle_price: Optional[float]
+    strike: float
+
+
+@dataclass
+class AnalysisResult:
+    """Complete analysis result for a single ticker."""
+    ticker: str
+    underlying_price: float
+    # Filter booleans (backward compatible)
+    avg_volume_pass: bool
+    iv30_rv30_pass: bool
+    ts_slope_pass: bool
+    # Actual values
+    avg_volume: float
+    iv30: float
+    rv30: float
+    iv_rv_ratio: float
+    ts_slope: float
+    iv_nearest_dte: float
+    nearest_dte: int
+    iv_at_45: float
+    expected_move_pct: Optional[float]
+    expected_move_dollar: Optional[float]
+    straddle_price: Optional[float]
+    # IV Rank/Percentile
+    iv_rank: Optional[float] = None
+    iv_percentile: Optional[float] = None
+    # ATM details
+    atm_info_nearest: Optional[ATMInfo] = None
+    atm_strike: Optional[float] = None
+    # Recommendation
+    recommendation: str = "Avoid"
+
+
+# ---------------------------------------------------------------------------
+# Core functions (preserved from original)
+# ---------------------------------------------------------------------------
 
 def filter_dates(dates):
     today = datetime.today().date()
     cutoff_date = today + timedelta(days=45)
-    
+
     sorted_dates = sorted(datetime.strptime(date, "%Y-%m-%d").date() for date in dates)
 
     arr = []
     for i, date in enumerate(sorted_dates):
         if date >= cutoff_date:
-            arr = [d.strftime("%Y-%m-%d") for d in sorted_dates[:i+1]]  
+            arr = [d.strftime("%Y-%m-%d") for d in sorted_dates[:i + 1]]
             break
-    
+
     if len(arr) > 0:
         if arr[0] == today.strftime("%Y-%m-%d"):
             return arr[1:]
@@ -40,15 +92,15 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
     log_ho = (price_data['High'] / price_data['Open']).apply(np.log)
     log_lo = (price_data['Low'] / price_data['Open']).apply(np.log)
     log_co = (price_data['Close'] / price_data['Open']).apply(np.log)
-    
+
     log_oc = (price_data['Open'] / price_data['Close'].shift(1)).apply(np.log)
-    log_oc_sq = log_oc**2
-    
+    log_oc_sq = log_oc ** 2
+
     log_cc = (price_data['Close'] / price_data['Close'].shift(1)).apply(np.log)
-    log_cc_sq = log_cc**2
-    
+    log_cc_sq = log_cc ** 2
+
     rs = log_ho * (log_ho - log_co) + log_lo * (log_lo - log_co)
-    
+
     close_vol = log_cc_sq.rolling(
         window=window,
         center=False
@@ -64,14 +116,14 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
         center=False
     ).sum() * (1.0 / (window - 1.0))
 
-    k = 0.34 / (1.34 + ((window + 1) / (window - 1)) )
+    k = 0.34 / (1.34 + ((window + 1) / (window - 1)))
     result = (open_vol + k * close_vol + (1 - k) * window_rs).apply(np.sqrt) * np.sqrt(trading_periods)
 
     if return_last_only:
         return result.iloc[-1]
     else:
         return result.dropna()
-    
+
 
 def build_term_structure(days, ivs):
     days = np.array(days)
@@ -81,206 +133,203 @@ def build_term_structure(days, ivs):
     days = days[sort_idx]
     ivs = ivs[sort_idx]
 
-
     spline = interp1d(days, ivs, kind='linear', fill_value="extrapolate")
 
     def term_spline(dte):
-        if dte < days[0]:  
+        if dte < days[0]:
             return ivs[0]
         elif dte > days[-1]:
             return ivs[-1]
-        else:  
+        else:
             return float(spline(dte))
 
     return term_spline
 
-def get_current_price(ticker):
-    todays_data = ticker.history(period='1d')
-    return todays_data['Close'][0]
 
-def compute_recommendation(ticker):
+# ---------------------------------------------------------------------------
+# New helper functions
+# ---------------------------------------------------------------------------
+
+def extract_atm_info(option_chains: Dict, exp_dates: List[str],
+                     underlying_price: float) -> List[ATMInfo]:
+    """Extract ATM IV and straddle price for each expiration."""
+    today = datetime.today().date()
+    atm_list = []
+
+    for exp_date in exp_dates:
+        chain = option_chains.get(exp_date)
+        if chain is None:
+            continue
+        calls = chain.calls
+        puts = chain.puts
+        if calls.empty or puts.empty:
+            continue
+
+        # Find ATM strike
+        call_diffs = (calls['strike'] - underlying_price).abs()
+        call_idx = call_diffs.idxmin()
+        call_iv = float(calls.loc[call_idx, 'impliedVolatility'])
+        strike = float(calls.loc[call_idx, 'strike'])
+
+        put_diffs = (puts['strike'] - underlying_price).abs()
+        put_idx = put_diffs.idxmin()
+        put_iv = float(puts.loc[put_idx, 'impliedVolatility'])
+
+        atm_iv = (call_iv + put_iv) / 2.0
+
+        # Mid prices for straddle
+        call_bid = calls.loc[call_idx, 'bid']
+        call_ask = calls.loc[call_idx, 'ask']
+        put_bid = puts.loc[put_idx, 'bid']
+        put_ask = puts.loc[put_idx, 'ask']
+
+        call_mid = (call_bid + call_ask) / 2.0 if (call_bid and call_ask) else None
+        put_mid = (put_bid + put_ask) / 2.0 if (put_bid and put_ask) else None
+        straddle = (call_mid + put_mid) if (call_mid is not None and put_mid is not None) else None
+
+        exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+        dte = (exp_date_obj - today).days
+
+        atm_list.append(ATMInfo(
+            exp_date=exp_date,
+            dte=dte,
+            call_iv=call_iv,
+            put_iv=put_iv,
+            atm_iv=atm_iv,
+            call_mid=call_mid,
+            put_mid=put_mid,
+            straddle_price=straddle,
+            strike=strike,
+        ))
+
+    return sorted(atm_list, key=lambda x: x.dte)
+
+
+def compute_iv_rank_percentile(price_history_1yr, current_iv: float,
+                                window: int = 30):
+    """Compute IV Rank and IV Percentile using HV as proxy.
+
+    Since yfinance doesn't provide historical IV, we use the yang_zhang HV
+    time series over 1 year as an approximation.
+
+    Returns: (iv_rank, iv_percentile) or (None, None)
+    """
+    if price_history_1yr is None or price_history_1yr.empty:
+        return None, None
+
     try:
-        ticker = ticker.strip().upper()
-        if not ticker:
-            return "No stock symbol provided."
-        
-        try:
-            stock = yf.Ticker(ticker)
-            if len(stock.options) == 0:
-                raise KeyError()
-        except KeyError:
-            return f"Error: No options found for stock symbol '{ticker}'."
-        
-        exp_dates = list(stock.options)
-        try:
-            exp_dates = filter_dates(exp_dates)
-        except:
-            return "Error: Not enough option data."
-        
-        options_chains = {}
-        for exp_date in exp_dates:
-            options_chains[exp_date] = stock.option_chain(exp_date)
-        
-        try:
-            underlying_price = get_current_price(stock)
-            if underlying_price is None:
-                raise ValueError("No market price found.")
-        except Exception:
-            return "Error: Unable to retrieve underlying stock price."
-        
-        atm_iv = {}
-        straddle = None 
-        i = 0
-        for exp_date, chain in options_chains.items():
-            calls = chain.calls
-            puts = chain.puts
+        hv_series = yang_zhang(price_history_1yr, window=window, return_last_only=False)
+        hv_series = hv_series.dropna()
 
-            if calls.empty or puts.empty:
-                continue
+        if len(hv_series) < 60:
+            return None, None
 
-            call_diffs = (calls['strike'] - underlying_price).abs()
-            call_idx = call_diffs.idxmin()
-            call_iv = calls.loc[call_idx, 'impliedVolatility']
+        hv_min = float(hv_series.min())
+        hv_max = float(hv_series.max())
 
-            put_diffs = (puts['strike'] - underlying_price).abs()
-            put_idx = put_diffs.idxmin()
-            put_iv = puts.loc[put_idx, 'impliedVolatility']
+        if hv_max - hv_min < 0.001:
+            return 50.0, 50.0
 
-            atm_iv_value = (call_iv + put_iv) / 2.0
-            atm_iv[exp_date] = atm_iv_value
+        iv_rank = (current_iv - hv_min) / (hv_max - hv_min) * 100.0
+        iv_rank = max(0.0, min(100.0, iv_rank))
 
-            if i == 0:
-                call_bid = calls.loc[call_idx, 'bid']
-                call_ask = calls.loc[call_idx, 'ask']
-                put_bid = puts.loc[put_idx, 'bid']
-                put_ask = puts.loc[put_idx, 'ask']
-                
-                if call_bid is not None and call_ask is not None:
-                    call_mid = (call_bid + call_ask) / 2.0
-                else:
-                    call_mid = None
+        iv_percentile = float((hv_series < current_iv).sum()) / len(hv_series) * 100.0
 
-                if put_bid is not None and put_ask is not None:
-                    put_mid = (put_bid + put_ask) / 2.0
-                else:
-                    put_mid = None
+        return round(iv_rank, 1), round(iv_percentile, 1)
+    except Exception:
+        return None, None
 
-                if call_mid is not None and put_mid is not None:
-                    straddle = (call_mid + put_mid)
 
-            i += 1
-        
-        if not atm_iv:
-            return "Error: Could not determine ATM IV for any expiration dates."
-        
-        today = datetime.today().date()
-        dtes = []
-        ivs = []
-        for exp_date, iv in atm_iv.items():
-            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
-            days_to_expiry = (exp_date_obj - today).days
-            dtes.append(days_to_expiry)
-            ivs.append(iv)
-        
-        term_spline = build_term_structure(dtes, ivs)
-        
-        ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])
-        
-        price_history = stock.history(period='3mo')
-        iv30_rv30 = term_spline(30) / yang_zhang(price_history)
+def classify_recommendation(avg_volume_pass: bool, iv30_rv30_pass: bool,
+                            ts_slope_pass: bool) -> str:
+    """Classify as Recommended/Consider/Avoid."""
+    if avg_volume_pass and iv30_rv30_pass and ts_slope_pass:
+        return "Recommended"
+    elif ts_slope_pass and (avg_volume_pass or iv30_rv30_pass):
+        return "Consider"
+    else:
+        return "Avoid"
 
-        avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
 
-        expected_move = str(round(straddle / underlying_price * 100,2)) + "%" if straddle else None
+# ---------------------------------------------------------------------------
+# Main analysis pipeline
+# ---------------------------------------------------------------------------
 
-        return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move} #Check that they are in our desired range (see video)
-    except Exception as e:
-        raise Exception(f'Error occured processing')
-        
+def analyze_ticker(data, include_iv_rank: bool = True) -> AnalysisResult:
+    """Full analysis pipeline. Takes OptionData from data_provider.
 
-    
+    Returns AnalysisResult with all values populated.
+    """
+    # Extract ATM info for each expiration
+    atm_list = extract_atm_info(data.option_chains, data.exp_dates, data.underlying_price)
 
-def main_gui():
-    main_layout = [
-        [sg.Text("Enter Stock Symbol:"), sg.Input(key="stock", size=(20, 1), focus=True)],
-        [sg.Button("Submit", bind_return_key=True), sg.Button("Exit")],
-        [sg.Text("", key="recommendation", size=(50, 1))]
-    ]
-    
-    window = sg.Window("Earnings Position Checker", main_layout)
-    
-    while True:
-        event, values = window.read()
-        if event in (sg.WINDOW_CLOSED, "Exit"):
-            break
+    if not atm_list:
+        raise ValueError(f"Could not determine ATM IV for '{data.ticker_symbol}'.")
 
-        if event == "Submit":
-            window["recommendation"].update("")
-            stock = values.get("stock", "")
+    # Build term structure
+    dtes = [a.dte for a in atm_list]
+    ivs = [a.atm_iv for a in atm_list]
+    term_spline = build_term_structure(dtes, ivs)
 
-            loading_layout = [[sg.Text("Loading...", key="loading", justification="center")]]
-            loading_window = sg.Window("Loading", loading_layout, modal=True, finalize=True, size=(275, 200))
+    # Nearest ATM info
+    nearest = atm_list[0]
 
-            result_holder = {}
+    # IV at key DTEs
+    iv_nearest = term_spline(dtes[0])
+    iv_at_30 = term_spline(30)
+    iv_at_45 = term_spline(45)
 
-            def worker():
-                try:
-                    result = compute_recommendation(stock)
-                    result_holder['result'] = result
-                except Exception as e:
-                    result_holder['error'] = str(e)
+    # Term structure slope
+    ts_slope = (iv_at_45 - iv_nearest) / (45 - dtes[0]) if 45 != dtes[0] else 0
 
-            thread = threading.Thread(target=worker, daemon=True)
-            thread.start()
+    # Realized volatility (Yang-Zhang 30-day)
+    rv30 = float(yang_zhang(data.price_history_3mo))
 
-            while thread.is_alive():
-                event_load, _ = loading_window.read(timeout=100)
-                if event_load == sg.WINDOW_CLOSED:
-                    break
-            thread.join(timeout=1)
+    # IV/RV ratio
+    iv_rv_ratio = iv_at_30 / rv30 if rv30 > 0 else 0
 
-            if 'error' in result_holder:
-                loading_window.close()
-                window["recommendation"].update(f"Error: {result_holder['error']}")
-            elif 'result' in result_holder:
-                loading_window.close()
-                result = result_holder['result']
+    # Expected move
+    expected_move_pct = None
+    expected_move_dollar = None
+    straddle_price = nearest.straddle_price
+    if straddle_price:
+        expected_move_pct = round(straddle_price / data.underlying_price * 100, 2)
+        expected_move_dollar = round(straddle_price, 2)
 
-                avg_volume_bool    = result['avg_volume']
-                iv30_rv30_bool     = result['iv30_rv30']
-                ts_slope_bool      = result['ts_slope_0_45']
-                expected_move      = result['expected_move']
-                
-                if avg_volume_bool and iv30_rv30_bool and ts_slope_bool:
-                    title = "Recommended"
-                    title_color = "#006600"
-                elif ts_slope_bool and ((avg_volume_bool and not iv30_rv30_bool) or (iv30_rv30_bool and not avg_volume_bool)):
-                    title = "Consider"
-                    title_color = "#ff9900"
-                else:
-                    title = "Avoid"
-                    title_color = "#800000"
-                
-                result_layout = [
-                    [sg.Text(title, text_color=title_color, font=("Helvetica", 16))],
-                    [sg.Text(f"avg_volume: {'PASS' if avg_volume_bool else 'FAIL'}", text_color="#006600" if avg_volume_bool else "#800000")],
-                    [sg.Text(f"iv30_rv30: {'PASS' if iv30_rv30_bool else 'FAIL'}", text_color="#006600" if iv30_rv30_bool else "#800000")],
-                    [sg.Text(f"ts_slope_0_45: {'PASS' if ts_slope_bool else 'FAIL'}", text_color="#006600" if ts_slope_bool else "#800000")],
-                    [sg.Text(f"Expected Move: {expected_move}", text_color="blue")],
-                    [sg.Button("OK")]
-                ]
-                
-                result_window = sg.Window("Recommendation", result_layout, modal=True, finalize=True, size=(275, 200))
-                while True:
-                    event_result, _ = result_window.read(timeout=100)
-                    if event_result in (sg.WINDOW_CLOSED, "OK"):
-                        break
-                result_window.close()
-    
-    window.close()
+    # Filter checks
+    avg_volume_pass = data.avg_volume_30d >= 1_500_000
+    iv30_rv30_pass = iv_rv_ratio >= 1.25
+    ts_slope_pass = ts_slope <= -0.00406
 
-def gui():
-    main_gui()
+    # IV Rank / Percentile
+    iv_rank, iv_percentile = None, None
+    if include_iv_rank:
+        iv_rank, iv_percentile = compute_iv_rank_percentile(
+            data.price_history_1yr, iv_at_30
+        )
 
-if __name__ == "__main__":
-    gui()
+    recommendation = classify_recommendation(avg_volume_pass, iv30_rv30_pass, ts_slope_pass)
+
+    return AnalysisResult(
+        ticker=data.ticker_symbol,
+        underlying_price=data.underlying_price,
+        avg_volume_pass=avg_volume_pass,
+        iv30_rv30_pass=iv30_rv30_pass,
+        ts_slope_pass=ts_slope_pass,
+        avg_volume=data.avg_volume_30d,
+        iv30=round(iv_at_30, 4),
+        rv30=round(rv30, 4),
+        iv_rv_ratio=round(iv_rv_ratio, 2),
+        ts_slope=round(ts_slope, 6),
+        iv_nearest_dte=round(iv_nearest, 4),
+        nearest_dte=dtes[0],
+        iv_at_45=round(iv_at_45, 4),
+        expected_move_pct=expected_move_pct,
+        expected_move_dollar=expected_move_dollar,
+        straddle_price=straddle_price,
+        iv_rank=iv_rank,
+        iv_percentile=iv_percentile,
+        atm_info_nearest=nearest,
+        atm_strike=nearest.strike,
+        recommendation=recommendation,
+    )
